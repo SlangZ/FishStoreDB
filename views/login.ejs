@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <link rel="stylesheet" href="/css/styles.css"> <!-- Link to your custom stylesheet -->
+</head>
+<body>
+    <div class="formHolder">
+        <div class="form-container">
+            <h2>Login</h2>
+            <div class="form-group">
+                <form action="/login" method="POST">
+                    <label for="email">Email:</label>
+                    <input type="email" name="email" id="email" required><br>
+                
+                    <label for="password">Password:</label>
+                    <input type="password" name="password" id="password" required><br>
+                
+                    <label>
+                        <input type="checkbox" name="rememberMe"> Remember Me
+                    </label><br>
+                
+                    <button type="submit">Login</button>
+                </form>                
+            </div>
+        </div>
+    </div>
+
+    <% if (typeof errors !== 'undefined' && errors.length > 0) { %>
+        <ul>
+          <% errors.forEach(function(error) { %>
+            <li><%= error.msg %></li>
+          <% }); %>
+        </ul>
+    <% } %>      
+
+    <% if (typeof error !== 'undefined') { %>
+        <p style="color: red;"><%= error %></p>
+    <% } %>
+
+    <p><a href="/forgot-password">Forgot Password?</a></p>
+</body>
+</html>

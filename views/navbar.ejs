@@ -1,0 +1,32 @@
+
+<head> <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css"></head>
+<div class="navbar-container">
+    <div class="navbar">
+        <a href="/">Home</a>
+        <a href="/products">Products</a>
+        <a href="/contact">Contact</a>
+        <a href="/register">Sign-Up</a>
+        <li><a href="/cart">
+            <i class="fas fa-shopping-cart"></i>
+            <span id="cart-count" style="position: absolute; top: -5px; right: -10px; background-color: red; color: white; border-radius: 50%; padding: 2px 8px; font-size: 14px;"></span>
+        </a></li>
+        <!-- Add more links as needed -->
+    </div>
+</div>
+
+<script>
+    // Fetch cart count from the server and update the cart icon
+    fetch('/cart/count')
+      .then(response => response.json())
+      .then(data => {
+        const cartCount = data.count;
+        const cartCountElement = document.getElementById('cart-count');
+        if (cartCount > 0) {
+          cartCountElement.textContent = cartCount;
+        } else {
+          cartCountElement.style.display = 'none';  // Hide if no items in cart
+        }
+      })
+      .catch(err => console.error('Error fetching cart count:', err));
+</script>
+  

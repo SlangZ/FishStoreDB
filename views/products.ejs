@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Our Products</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div id="overlay"></div>
+    <%- include('navbar') %>
+
+    <main id="products-page">
+        <h1>Our Products</h1>
+        <!-- Mini Bar for filtering -->
+        <div class="filter-bar">
+            <!-- Search Bar -->
+            <form method="get" action="/products" class="search-bar" onsubmit="return validateSearch()">
+                <input type="text" name="searchQuery" id="search-input" placeholder="Search products..." value="<%= searchQuery || '' %>" autocomplete="off"/>
+            </form>
+            
+            <!-- Category Filter -->
+            <form method="get" action="/products" class="category-filter">
+                <select name="categoryID" id="category-select" onchange="this.form.submit()">
+                    <option value="">All Categories</option>
+                    <% categories.forEach(category => { %>
+                        <option value="<%= category.CategoryID %>" <%= category.CategoryID == categoryID ? 'selected' : '' %> >
+                            <%= category.CategoryName %>
+                        </option>
+                    <% }); %>
+                </select>
+            </form>    
+        </div>
+
+        <% if (noMatches) { %>
+            <p>No matches found for "<%= searchQuery %>".</p>
+            <p>Please try being more precise or check for spelling errors.</p>
+        <% } else { %>
+            <div id="products-container">
+                <% products.forEach(product => { %>
+                    <div class="product-card" data-product-id="<%= product.ProductID %>">
+                        <img src="/images/<%= product.images[0] ? product.images[0].ImagePath : 'default.jpg' %>" 
+                             alt="<%= product.ProdName %>" class="product-image">
+                        <h2 class="product-name"><%= product.ProdName %></h2>
+                        <p class="product-price">£<%= product.price %></p>
+                        <p class="product-description"><%= product.description %></p>
+                    </div>                    
+                <% }); %>
+            </div>
+        
+            <!-- Product Details Box (Hidden by Default) -->
+            <div id="product-details-box" class="product-details-box" style="display: none;">
+                <div class="product-details-content">
+                    <span id="close-details" class="close-details">&times;</span>
+                    <div class="detailsHolder">
+                        <div class="product-details-container">
+                            <!-- Left: Image Slider -->
+                            <div id="product-images-slider" class="product-images-slider">
+                                <!-- Images will be dynamically loaded here -->
+                            </div>
+                
+                            <!-- Right: Product Details -->
+                            <div class="product-info">
+                                <h2 id="product-name-detail"></h2>
+                                <p id="product-price-detail"></p>
+                                <p id="product-description-detail"></p>
+                                <p id="product-dimensions-detail"></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="product-actions">
+                        <div class="quantity-selector">
+                            <label for="quantity">Quantity:</label>
+                            <input type="number" id="quantity" name="quantity" min="1" value="1" required/>
+                        </div>
+                        <div class="action-buttons">
+                            <form action="/cart/update" method="POST">
+                                <input type="hidden" name="productID" id="hidden-product-id" value=""/>
+                                <input type="hidden" name="quantity" id="hidden-quantity" value="1"/> <!-- Add quantity here -->
+                                <button type="submit">Add to Cart</button>
+                            </form>
+                            <button id="buy-now-btn" class="btn">Buy Now</button>
+                        </div>                        
+                    </div>                    
+                </div>
+            </div>            
+        <% } %>
+        <% if (totalPages > 1) { %>
+            <div class="pagination">
+              <% for (let i = 1; i <= totalPages; i++) { %>
+                <a href="/products?<%= searchQuery ? 'searchQuery=' + searchQuery + '&' : '' %><%= categoryID ? 'categoryID=' + categoryID + '&' : '' %>page=<%= i %>" 
+                   class="page-link <%= i === currentPage ? 'active' : '' %>">
+                  <%= i %>
+                </a>
+              <% } %>
+            </div>
+        <% } %>
+    </main>
+
+    <script>
+        console.log("script is read");
+        document.addEventListener('DOMContentLoaded', () => {
+            const productCards = document.querySelectorAll('.product-card');
+            const expandedProduct = document.getElementById('product-details-box'); // Use the right ID here
+            const closeExpandedView = document.getElementById('close-details'); // Close button
+            const sliderContainer = document.getElementById('product-images-slider'); // Slider container
+            const overlay = document.getElementById('overlay'); // Full-screen overlay element
+
+            // Elements to populate
+            const expandedName = document.getElementById('product-name-detail');
+            const expandedPrice = document.getElementById('product-price-detail');
+            const expandedDescription = document.getElementById('product-description-detail');
+            const expandedDimensions = document.getElementById('product-dimensions-detail');
+
+            productCards.forEach(card => {
+            const productId = card.dataset.productId;
+
+            card.addEventListener('click', () => {
+                fetch(`/products/details/${productId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data && data.product) {
+                            // Populate product details
+                            expandedName.textContent = data.product.ProdName;
+                            expandedPrice.textContent = `£${data.product.price}`;
+                            expandedDescription.textContent = data.product.description;
+                            expandedDimensions.textContent = `Dimensions: ${data.product.dimensions || 'Not available'}`;
+
+                            sliderContainer.innerHTML = ''; // Clear existing images
+                            data.images.forEach(image => {
+                                const img = document.createElement('img');
+                                img.src = `/images/${image}`;
+                                img.alt = data.product.ProdName;
+                                sliderContainer.appendChild(img);
+                            });
+
+                            // Set the hidden input field's value
+                            document.getElementById('hidden-product-id').value = productId;
+
+                            // Show expanded product view and overlay
+                            expandedProduct.style.display = 'block';
+                            overlay.style.display = 'block'; // Show the overlay
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching product details:', error);
+                    });
+                });
+            });
+
+
+            // Close expanded view and hide overlay
+            closeExpandedView.addEventListener('click', () => {
+                expandedProduct.style.display = 'none';
+                overlay.style.display = 'none'; // Hide the overlay
+                sliderContainer.innerHTML = ''; // Clear slider content
+                $('.product-slider').slick('unslick'); // Destroy slider if initialized
+            });
+
+            // Close modal and hide overlay when clicking on the overlay
+            overlay.addEventListener('click', () => {
+                expandedProduct.style.display = 'none';
+                overlay.style.display = 'none'; // Hide the overlay
+                sliderContainer.innerHTML = ''; // Clear slider content
+                $('.product-slider').slick('unslick'); // Destroy slider if initialized
+            });
+        });
+
+        document.getElementById('quantity').addEventListener('input', function() {
+            document.getElementById('hidden-quantity').value = this.value;
+        });
+
+        document.querySelector('form').addEventListener('submit', function(e) {
+            console.log('Quantity:', document.getElementById('hidden-quantity').value); // Debugging
+        });
+        console.log("script ended");
+    </script>
+    <%- include('footer') %>
+</body>
+</html>
