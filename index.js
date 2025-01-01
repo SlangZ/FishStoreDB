@@ -46,6 +46,21 @@ app.use(
   })
 );
 
+function checkAuthenticated(req, res, next) {
+  if (req.session.user) {
+    // If logged in, pass the user info to the view
+    res.locals.user = req.session.user;
+  } else {
+    // If not logged in, ensure user is undefined
+    res.locals.user = null;
+  }
+  next();
+}
+
+
+app.use(checkAuthenticated);
+
+
 
 app.use(bodyParser.urlencoded({ extended: false })); // For parsing URL-encoded form data
 app.use(bodyParser.json()); // For parsing JSON data
@@ -54,8 +69,30 @@ app.use(cookieParser());
 // Serve static files (like CSS, JS, images)
 app.use(express.static('public'));
 
-app.use(checkRememberMe);
+app.use((req, res, next) => {
+  if (req.path.startsWith('/css') || req.path.startsWith('/images') || req.path === '/favicon.ico') {
+    return next(); // Skip middleware for static files
+  }
+  checkRememberMe(req, res, next);
+});
 
+app.use((req, res, next) => {
+  console.log('Cart middleware executed');
+  res.locals.cartCount = req.session.cart 
+    ? req.session.cart.reduce((sum, item) => sum + item.quantity, 0) 
+    : 0;
+  console.log('Cart count:', res.locals.cartCount);
+  next();
+});
+
+
+//logs 
+app.use((req, res, next) => {
+  console.log('Incoming request:', req.url);
+  console.log('Session data:', req.session);
+  console.log('Cookies:', req.cookies);
+  next();
+});
 
 
 // Other route handlers...
@@ -74,13 +111,22 @@ app.get('/api/categories', (req, res) => {
 
 // Homepage Route
 app.get('/', (req, res) => {
+  console.log('Home route executed');
+  console.log('User in res.locals:', res.locals.user);
+  console.log('Cart in session:', req.session.cart);
+
   db.query('SELECT * FROM products LIMIT 6', (err, results) => {
     if (err) {
+      console.error('Error fetching products:', err);
       return res.status(500).send('Error fetching products');
     }
-    res.render('index', { products: results });
+    res.render('index', { 
+      user: res.locals.user, 
+      products: results 
+    });
   });
 });
+
 
 //Products page Route
 // The route for the products page
@@ -259,46 +305,55 @@ app.get('/cart', (req, res) => {
 app.post('/cart/update', (req, res) => {
   const { productID, quantity } = req.body;
 
-  // Ensure quantity is a valid positive integer
   const parsedQuantity = parseInt(quantity, 10);
   if (!productID || isNaN(parsedQuantity) || parsedQuantity < 0) {
     return res.status(400).send('Invalid productID or quantity');
   }
 
-  // Access the cart from the session
   let cart = req.session.cart || [];
-
-  // Find the existing product in the cart
   const existingProductIndex = cart.findIndex(item => item.productID === productID);
 
   if (existingProductIndex !== -1) {
     if (parsedQuantity === 0) {
-      // Remove the product from the cart if quantity is 0
       cart.splice(existingProductIndex, 1);
     } else {
-      // Update the existing product's quantity
       cart[existingProductIndex].quantity = parsedQuantity;
     }
   } else if (parsedQuantity > 0) {
-    // Add a new product to the cart if it's not already present
     cart.push({ productID, quantity: parsedQuantity });
   } else {
     return res.status(400).send('Product not found in cart for removal');
   }
 
-  // Save the updated cart in the session
   req.session.cart = cart;
 
-  // If the user has the rememberMe cookie, also store the cart in the cookie
-  if (req.cookies.rememberMe) {
-    res.cookie('cart', JSON.stringify(cart), { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000 }); // 30 days
+  if (req.session.user) {
+    const userID = req.session.user.id;
+
+    const deleteSql = 'DELETE FROM Cart WHERE UserID = ? AND ProductID = ?';
+    db.query(deleteSql, [userID, productID], err => {
+      if (err) {
+        console.error('Error updating cart:', err);
+        return res.status(500).send('Error updating cart.');
+      }
+
+      if (parsedQuantity > 0) {
+        const insertSql = 'INSERT INTO Cart (UserID, ProductID, Quantity) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE Quantity = ?';
+        db.query(insertSql, [userID, productID, parsedQuantity, parsedQuantity], insertErr => {
+          if (insertErr) {
+            console.error('Error updating cart:', insertErr);
+            return res.status(500).send('Error updating cart.');
+          }
+          res.redirect('/cart');
+        });
+      } else {
+        res.redirect('/cart');
+      }
+    });
+  } else {
+    res.cookie('cart', JSON.stringify(cart), { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000 });
+    res.redirect('/cart');
   }
-
-  // Log the updated cart for debugging
-  console.log("Updated cart:", cart);
-
-  // Redirect to the cart page
-  res.redirect('/cart');
 });
 
 
@@ -480,20 +535,32 @@ app.post('/login', (req, res) => {
     req.session.user = { id: user.UserID, name: user.Name };
 
     if (rememberMe) {
-      // Generate JWT token for rememberMe
       const token = jwt.sign(
         { id: user.UserID, name: user.Name },
         process.env.JWT_SECRET || 'defaultsecret',
-        { expiresIn: '30d' } // Token valid for 30 days
+        { expiresIn: '30d' }
       );
-
-      res.cookie('rememberMe', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000 }); // 30 days
+      res.cookie('rememberMe', token, { httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000 });
     }
 
-    // After login, redirect to cart
-    res.redirect('/cart');
+    // Sync cart from database
+    const cartSql = 'SELECT ProductID, Quantity FROM Cart WHERE UserID = ?';
+    db.query(cartSql, [user.UserID], (cartErr, cartResults) => {
+      if (cartErr) {
+        console.error('Error fetching cart:', cartErr);
+        return res.status(500).send('Error fetching cart.');
+      }
+
+      req.session.cart = cartResults.map(item => ({
+        productID: String(item.ProductID),
+        quantity: item.Quantity
+      }));
+
+      res.redirect('/cart');
+    });
   });
 });
+
 
 app.get('/verify', (req, res) => {
   const token = req.query.token;
@@ -600,6 +667,18 @@ app.post('/reset-password/:token', (req, res) => {
   } catch (err) {
     res.status(400).send('Invalid or expired token.');
   }
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy(err => {
+    if (err) {
+      console.error('Error destroying session:', err);
+      return res.status(500).send('Error logging out.');
+    }
+
+    res.clearCookie('rememberMe');
+    res.redirect('/');
+  });
 });
 
 
