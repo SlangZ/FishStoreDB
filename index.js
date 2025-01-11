@@ -20,7 +20,8 @@ const jwt = require('jsonwebtoken'); // For creating the remember me token
 const cookieParser = require('cookie-parser');
 const { checkRememberMe } = require('./middleware');
 const session = require('express-session');
-
+const paypal = require('@paypal/checkout-server-sdk');
+const stripe = require('stripe')(process.env.YOUR_STRIPE_SECRET_KEY)
 
 
 const db = mysql.createConnection({
@@ -57,7 +58,8 @@ function checkAuthenticated(req, res, next) {
   next();
 }
 
-
+app.use(cors());
+app.use(express.json());
 app.use(checkAuthenticated);
 
 
@@ -93,6 +95,18 @@ app.use((req, res, next) => {
   console.log('Cookies:', req.cookies);
   next();
 });
+
+
+// Configure PayPal environment
+const environment = new paypal.core.SandboxEnvironment('YOUR_CLIENT_ID', 'YOUR_CLIENT_SECRET');
+const client = new paypal.core.PayPalHttpClient(environment);
+
+const paypalClient = new paypal.core.PayPalHttpClient(
+  new paypal.core.SandboxEnvironment(
+    'YOUR_PAYPAL_CLIENT_ID',
+    'YOUR_PAYPAL_SECRET'
+  )
+);
 
 
 // Other route handlers...
@@ -267,7 +281,11 @@ function isAuthenticated(req, res, next) {
 // Display Cart Page
 // Get Cart Route
 app.get('/cart', (req, res) => {
+  const nonce = crypto.randomBytes(16).toString('base64');
   const cart = req.session.cart || [];
+
+  // Stripe public key
+  const stripePublicKey = require('stripe')(process.env.YOUR_STRIPE_PUBLIC_KEY); // Replace with your Stripe publishable key
 
   // If the cart exists, get the products from the database
   if (cart.length > 0) {
@@ -280,28 +298,42 @@ app.get('/cart', (req, res) => {
         return res.status(500).send('An error occurred while fetching cart items.');
       }
 
+      // Log products to verify the price is present
+      console.log('Products:', products);
+
       const cartItems = products.map(product => {
         const item = cart.find(cartItem => cartItem.productID === String(product.ProductID));
         return {
-          ...product,
-          quantity: item ? item.quantity : 0
+          productID: product.ProductID,  // Explicitly include productID
+          name: product.ProdName,         // Include name if necessary
+          price: product.price,           // Ensure price is included here
+          quantity: item ? item.quantity : 0,
         };
       });
+
+      // Log the final cart items
+      console.log('Cart Items:', cartItems);
 
       const totalPrice = cartItems.reduce((total, item) => {
         const price = parseFloat(item.price) || 0;
         const quantity = parseInt(item.quantity, 10) || 0;
-        return total + (price * quantity);
+        return total + price * quantity;
       }, 0);
 
-      res.render('cart', { cartItems, totalPrice });
+      // Pass the Stripe public key to the rendered template
+      res.set('Content-Security-Policy', `script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://www.paypal.com`);
+      res.render('cart', { cartItems, totalPrice, stripePublicKey, nonce });
     });
   } else {
-    res.render('cart', { cartItems: [], totalPrice: 0 });
+    // Cart is empty, render with Stripe public key
+    res.set('Content-Security-Policy', `script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://www.paypal.com`);
+    res.render('cart', { cartItems: [], totalPrice: 0, stripePublicKey, nonce });
   }
+  console.log('final cart:',cart);
 });
 
 // Update Cart Route
+// Update Cart
 app.post('/cart/update', (req, res) => {
   const { productID, quantity } = req.body;
 
@@ -356,10 +388,10 @@ app.post('/cart/update', (req, res) => {
   }
 });
 
-
 // Remove Item from Cart
 app.post('/cart/remove', (req, res) => {
   const { CartID } = req.body;
+  console.log('Received remove data:', req.body); // Debugging
 
   const deleteSql = 'DELETE FROM Cart WHERE CartID = ?';
   db.query(deleteSql, [CartID], (err, result) => {
@@ -681,10 +713,101 @@ app.get('/logout', (req, res) => {
   });
 });
 
+app.post('/cart/checkout', async (req, res) => {
+  const cart = req.session.cart || [];  // Access the cart from session
+  console.log('Checkout cart:', cart);
+
+  if (cart.length === 0) {
+    return res.status(400).send('Cart is empty.');
+  }
+
+  // Extract the product IDs from the cart
+  const productIDs = cart.map(item => item.productID);
+
+  // Convert db.query into a Promise for async/await
+  const getProductDetails = (productIDs) => {
+    return new Promise((resolve, reject) => {
+      const sql = `SELECT ProductID, price, ProdName, description FROM Products WHERE ProductID IN (${productIDs.map(() => '?').join(', ')})`;
+      db.query(sql, productIDs, (err, results) => {
+        if (err) {
+          reject('Error fetching products from the database: ' + err);
+        } else {
+          resolve(results);
+        }
+      });
+    });
+  };
+
+  try {
+    // Await the result of the database query
+    const products = await getProductDetails(productIDs);
+    console.log('Products retrieved:', products);
+
+    // Map cart items to line items for Stripe checkout
+    const lineItems = cart.map(item => {
+      // Find the corresponding product for the item in the cart
+      const product = products.find(p => p.ProductID === Number(item.productID));
+
+      if (!product) {
+        throw new Error(`Product with ID ${item.productID} not found.`);
+      }
+
+      const price = parseFloat(product.price);
+      console.log('Item price:', price);
+
+      if (isNaN(price)) {
+        throw new Error(`Invalid price for product: ${product.ProdName}`);
+      }
+
+      return {
+        price_data: {
+          currency: 'gbp',  // Change this to the currency you're using
+          product_data: {
+            name: product.ProdName,
+            description: product.description || 'No description available',
+          },
+          unit_amount: Math.round(price * 100),  // Convert to the smallest currency unit (cents)
+        },
+        quantity: item.quantity,
+      };
+    });
+
+    // Create a Stripe checkout session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card', 'paypal'],
+      line_items: lineItems,
+      mode: 'payment',  // Use 'payment' mode for one-time payments
+      success_url: `${process.env.BASE_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.BASE_URL}/cart`,
+    });
+
+    // Redirect the user to the Stripe checkout page
+    res.redirect(session.url);
+  } catch (err) {
+    console.error('Error creating Stripe session:', err);
+    res.status(500).send('Error creating Stripe session.');
+  }
+});
+
+app.get('/complete', async (req, res) => {
+  const result = Promise.all([
+      stripe.checkout.sessions.retrieve(req.query.session_id, { expand: ['payment_intent.payment_method'] }),
+      stripe.checkout.sessions.listLineItems(req.query.session_id)
+  ])
+
+  console.log(JSON.stringify(await result))
+
+  res.send('Your payment was successful')
+})
+
+app.get('/cancel', (req, res) => {
+  res.redirect('/')
+})
+
+
 
 // Middleware to parse JSON requests
-app.use(cors());
-app.use(express.json());
+
 
 // Use user routes
 app.use('/api/users', userRoutes);

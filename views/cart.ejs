@@ -27,18 +27,18 @@
             <tbody>
                 <% cartItems.forEach(item => { %>
                     <tr>
-                        <td><%= item.ProdName %></td>
+                        <td><%= item.name %></td>
                         <td>£<%= (parseFloat(item.price) || 0).toFixed(2) %></td>
                         <td>
                             <!-- Quantity control buttons -->
                             <div class="quantity-control">
                                 <form action="/cart/update" method="post">
-                                    <input type="hidden" name="productID" value="<%= item.ProductID %>">
+                                    <input type="hidden" name="productID" value="<%= item.productID %>">
                                     <button type="submit" name="quantity" value="<%= item.quantity - 1 %>">-</button>
                                 </form>
                                 <input type="text" value="<%= item.quantity %>" readonly>
                                 <form action="/cart/update" method="post">
-                                    <input type="hidden" name="productID" value="<%= item.ProductID %>">
+                                    <input type="hidden" name="productID" value="<%= item.productID %>">
                                     <button type="submit" name="quantity" value="<%= item.quantity + 1 %>">+</button>
                                 </form>
                             </div>
@@ -48,13 +48,19 @@
                 <% }); %>
             </tbody>
           </table>
-            <!-- Use totalPrice passed from backend -->
             <div class="cartHolder">
-                          <p><strong>Total Price: £<%= totalPrice.toFixed(2) %></strong></p>
-            <a href="/checkout" class="btn">Proceed to Checkout</a>
+                <p><strong>Total Price: £<%= totalPrice.toFixed(2) %></strong></p>
+                <form action="/cart/checkout" method="post">
+                    <input type="submit" value="Proceed to Checkout" id="checkout-button">
+                </form>
             </div>
         <% } %>
     </main>
+
+    
+
+    <!-- Add the cart data as a data attribute to an element -->
+    <div id="cart-data" data-cart="<%= JSON.stringify(cartItems) %>"></div>
 </body>
 
 
